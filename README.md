@@ -10,6 +10,13 @@ Disclaimer
 
 Note that this is an **ALPHA VERSION** and diff highlighting/alignment is somewhat quirky, I *strongly* recommend using a proper diff viewer / gitk when doing serious work. Don't complain if my program eats your lunch or crashes your machine - you have been warned.
 
+Known issues
+------------
+
+- Executing with a non-versioned file fails with a bogus error message
+- Invoking the tool with a versioned resource in directory /foo while not being in the same subtree as the GIT repository that contains /foo will not work
+- The program is supposed to keep track of the currently visible text region across different revisions ; this is currently not working correctly and the view will always jump to the end of the file instead
+
 Building
 --------
 
