@@ -18,12 +18,15 @@ package de.codesourcery.gittimelapse;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Menu;
 import java.awt.MenuBar;
 import java.awt.MenuItem;
+import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyAdapter;
@@ -32,6 +35,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.util.Date;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -44,13 +48,15 @@ import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSlider;
 import javax.swing.JTextArea;
 import javax.swing.JTextPane;
+import javax.swing.JViewport;
+import javax.swing.SwingUtilities;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
+import javax.swing.text.BadLocationException;
 import javax.swing.text.SimpleAttributeSet;
 import javax.swing.text.StyleConstants;
 
@@ -280,6 +286,8 @@ public class MyFrame extends JFrame {
 		private final SimpleAttributeSet deletedLineStyle;
 		private final SimpleAttributeSet addedLineStyle;
 		
+		private final JScrollPane rightPane;
+		
 		private int caretPosition = -1;		
 
 		public DiffPanel() 
@@ -307,8 +315,8 @@ public class MyFrame extends JFrame {
 
 			currentRevisionText.setEditable(false);
 
-			previousRevisionText.setEditable(false);			
-
+			previousRevisionText.setEditable(false);		
+			
 			setLayout(new BorderLayout() );
 
 			final JPanel leftPanel = new JPanel();
@@ -320,11 +328,29 @@ public class MyFrame extends JFrame {
 			final JPanel rightPanel = new JPanel();
 			rightPanel.setLayout( new BorderLayout() );
 			rightPanel.add( currentRevisionInfo , BorderLayout.NORTH);
-			final JScrollPane rightPane = new JScrollPane( currentRevisionText );
+			rightPane = new JScrollPane( currentRevisionText );
 			rightPanel.add( rightPane , BorderLayout.CENTER);	
 
+			// link scroll bars
 			leftPane.getHorizontalScrollBar().setModel(rightPane.getHorizontalScrollBar().getModel());
 			leftPane.getVerticalScrollBar().setModel(rightPane.getVerticalScrollBar().getModel());
+			
+			 // track offset of first visible line
+//			 rightPane.getViewport().addChangeListener(new ChangeListener() {
+//	                @Override
+//	                public void stateChanged(ChangeEvent e) 
+//	                {
+//	                    if (currentRevisionText.getText().length() > 0) 
+//	                    {
+//	                        JViewport viewport = (JViewport) e.getSource();
+//	                        Rectangle viewRect = viewport.getViewRect();
+//
+//	                        Point p = viewRect.getLocation();
+//	                        caretPosition = currentRevisionText.viewToModel(p);
+//	                    }
+//	                }
+//	            });			
+			
 
 			final JPanel compoundPanel = new JPanel();
 			compoundPanel.setLayout( new GridBagLayout() );
@@ -366,19 +392,58 @@ public class MyFrame extends JFrame {
 		}
 		
 		private void backupCaretPosition() {
-			caretPosition = currentRevisionInfo.getCaretPosition();
+            JViewport viewport = (JViewport) rightPane.getViewport();
+            Rectangle viewRect = viewport.getViewRect();
+
+            Point p = viewRect.getLocation();
+            caretPosition = currentRevisionText.viewToModel(p);
 		}
 		
-		private void restoreCaretPosition() 
+		public final void restoreCaretPosition()
 		{
-			if ( caretPosition != -1 ) {
+			if ( caretPosition < 0 ) {
+				return;
+			}
+			
+			final Runnable r = new Runnable() {
+				@Override
+				public void run() {
+
+					final Container container = SwingUtilities.getAncestorOfClass(JViewport.class, currentRevisionText);
+
+					if (container == null) {
+						return;
+					}
+
+					try {
+						final Rectangle r = currentRevisionText.modelToView(caretPosition);
+						if (r == null ) {
+							return;
+						}
+						final JViewport viewport = (JViewport) container;
+						final int extentHeight = viewport.getExtentSize().height;
+						final int viewHeight = viewport.getViewSize().height;
+
+						int y = Math.max(0, r.y - (extentHeight / 2));
+						y = Math.min(y, viewHeight - extentHeight);
+
+						viewport.setViewPosition(new Point(0, y));
+					} 
+					catch (BadLocationException ble) {
+					}    			
+				}
+
+			};
+
+			if ( SwingUtilities.isEventDispatchThread() ) {
+				r.run();
+			} else {
 				try {
-					currentRevisionInfo.setCaretPosition( caretPosition );
-				} catch(Exception e) {
-					
+					SwingUtilities.invokeAndWait( r );
+				} catch (InvocationTargetException | InterruptedException e) {
 				}
 			}
-		} 
+		}		
 
 		public void showRevisions(ObjectId previous,ObjectId current) throws IOException, PatchApplyException 
 		{
