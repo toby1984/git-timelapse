@@ -8,7 +8,7 @@ This project was inspired by the awesome http://code.google.com/p/svn-time-lapse
 Disclaimer
 ----------
 
-Note that this is an ALPHA VERSION and diff highlighting/alignment is somewhat quirky, I *strongly* recommend using a proper diff viewer / gitk when doing serious work. Don't complain if my program eats your lunch or crashes your machine - you have been warned.
+Note that this is an **ALPHA VERSION** and diff highlighting/alignment is somewhat quirky, I *strongly* recommend using a proper diff viewer / gitk when doing serious work. Don't complain if my program eats your lunch or crashes your machine - you have been warned.
 
 Building
 --------
