@@ -66,7 +66,28 @@ public class TextFile {
 		}
 		return rawText.getString(0,rawText.size(),false);
 	}
-
+	
+	/**
+	 * 
+	 * @param offset
+	 * @return line number (first line is number 0 !) or -1 if offset is not within this file's bounds
+	 */
+	public int getLineForOffset(int offset) 
+	{
+		final int lineCount = rawText.size();
+		int offset1 = 0;
+		for ( int line = 0 ; line < lineCount ; line++ ) 
+		{
+			Integer offset2 = lineStartOffsets.get(line);
+			if ( offset2 != null ) {
+				if ( offset1 <= offset && offset < offset2.intValue() ) {
+					return line;
+				}
+			}
+		}
+		return -1;
+	}
+	
 	public void setText(String text)
 	{
 		this.rawText = new RawText( text.getBytes() );
@@ -85,14 +106,15 @@ public class TextFile {
 		}
 	}
 
-	public int getLineCount() {
-		return rawText.size();
-	}
-
 	public Map<Integer,ChangeType> getChangedLines() {
 		return Collections.unmodifiableMap( changesByLine );
 	}
 
+	/**
+	 * 
+	 * @param line line number , first line as number 0
+	 * @return
+	 */
 	public ChangeType getChangeType( int line) {
 		final ChangeType result = changesByLine.get(line);
 		if ( line < 0 || line >= rawText.size() ) {
@@ -101,6 +123,11 @@ public class TextFile {
 		return result != null ? result : ChangeType.NO_CHANGE;
 	}
 
+	/**
+	 * 
+	 * @param line line number, first line has number 0
+	 * @return
+	 */
 	public int getLineStartOffset(int line) {
 		final Integer result = lineStartOffsets.get( line );
 		if ( line < 0 || line >= rawText.size() ) {
@@ -109,6 +136,11 @@ public class TextFile {
 		return result.intValue();
 	}
 
+	/**
+	 * 
+	 * @param line line number, first line has number 0
+	 * @return
+	 */
 	public int getLineEndOffset(int line) {
 		return getLineStartOffset( line ) + rawText.getString( line ).length()+1;
 	}

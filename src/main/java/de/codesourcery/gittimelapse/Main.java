@@ -18,8 +18,7 @@ package de.codesourcery.gittimelapse;
 import java.awt.Dimension;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.util.Stack;
 
 import org.apache.commons.lang.ArrayUtils;
 import org.eclipse.jgit.api.errors.GitAPIException;
@@ -27,24 +26,36 @@ import org.eclipse.jgit.errors.RevisionSyntaxException;
 
 public class Main {
 	
-	public static void main(String[] args) throws IOException, RevisionSyntaxException, GitAPIException {
+	public static boolean DEBUG_MODE = false;
+	
+	public static void main(String[] args) throws IOException, RevisionSyntaxException, GitAPIException 
+	{
+		final Stack<String> argStack = new Stack<>();
 		
-		if ( ArrayUtils.isEmpty( args ) && new File("/home/tobi/kepler_workspace/gittimelapse/src/main/java/gittimelapse/Main.java").exists() ) 
+		final String testFile = "/home/tgierke/workspace/voipmanager/voipmngr/voipmngr/build.xml";
+		if ( ArrayUtils.isEmpty( args ) && new File(testFile).exists() ) 
 		{
-			args = new String[]{"/home/tobi/kepler_workspace/gittimelapse/src/main/java/gittimelapse/Main.java"};
+			argStack.push( testFile );
 		}
 		
-		if ( ArrayUtils.isEmpty( args ) || args.length != 1) {
+		File file = null;
+		while ( ! argStack.isEmpty() ) {
+			if ( "-d".equals( argStack.peek() ) ) {
+				DEBUG_MODE = true;
+				argStack.pop();
+			} else {
+				file = new File( argStack.pop() );
+			}
+		}
+		
+		if ( file == null )
+		{
 			System.err.println("ERROR: Invalid command line.");
-			System.err.println("Usage: <versioned file>\n");
+			System.err.println("Usage: [-d] <versioned file>\n");
 			return;
 		}
 		
-		final File file = new File( args[0] );
-		
-		Path cwd = Paths.get("").toAbsolutePath();
-		
-		final GitHelper helper = new GitHelper(cwd.toFile());
+		final GitHelper helper = new GitHelper(file.getParentFile());
 		
 		MyFrame frame = new MyFrame(file,helper);
 		frame.setPreferredSize(new Dimension(640,480));

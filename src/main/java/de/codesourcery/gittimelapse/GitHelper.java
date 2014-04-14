@@ -52,16 +52,21 @@ import org.eclipse.jgit.treewalk.filter.TreeFilter;
 import de.codesourcery.gittimelapse.PathModel.PathChangeModel;
 
 /**
- * Various helper methods to make dealing with GIT plumbing easier.
+ * Some helper methods to make dealing with GIT plumbing easier.
  * 
  * @author tobias.gierke@code-sourcery.de
  */
-public class GitHelper {
-
+public class GitHelper 
+{
 	private final Repository repository;
 	private final File gitDir;
 	private final File repoBaseDir;
 	private final File currentWorkingDir;
+	
+	public interface IProgressCallback 
+	{
+		public void foundCommit(ObjectId commitId);
+	}
 
 	public interface ICommitVisitor 
 	{
@@ -126,6 +131,8 @@ public class GitHelper {
 
 		public byte[] readFile(ObjectId commit) throws IOException 
 		{
+			long time = -System.currentTimeMillis();
+			try {
 			final ByteArrayOutputStream out = new ByteArrayOutputStream();
 			final String path = stripRepoBaseDir( this.file );
 			final PathFilter filter = createPathFilter( this.file );
@@ -140,6 +147,14 @@ public class GitHelper {
 			};
 			visitCommits( this.file , false , commit , func );
 			return out.toByteArray();
+			} 
+			finally 
+			{
+				if ( Main.DEBUG_MODE ) {
+					time +=System.currentTimeMillis();
+					System.out.println("readFile( "+commit.getName()+") = "+time+" ms");
+				}
+			}
 		}
 
 		public boolean isEmpty() {
@@ -171,7 +186,16 @@ public class GitHelper {
 
 		this.currentWorkingDir = currentWorkingDir;
 		this.gitDir = findGitDir( this.currentWorkingDir ) ;
+		
+		if ( Main.DEBUG_MODE ) {
+			System.out.println("GIT repo: "+this.gitDir);
+		}
+		
 		this.repoBaseDir = this.gitDir.getParentFile();
+		
+		if ( Main.DEBUG_MODE ) {
+			System.out.println("Base dir: "+this.repoBaseDir);
+		}
 
 		final FileRepositoryBuilder builder = new FileRepositoryBuilder();
 		builder.setGitDir( gitDir );
@@ -186,14 +210,17 @@ public class GitHelper {
 		}
 		if ( ! directory.isDirectory() ) {
 			throw new IllegalArgumentException("CWD "+directory+" is not a directory?");
-		}		
-		File tmp = new File(directory,".git");
-		do {
-			if ( tmp.exists() ) {
-				return tmp;
+		}
+		File tmp = directory;
+		do 
+		{
+			File repoDir = new File(tmp,".git");
+			if ( repoDir.exists() && repoDir.isDirectory() ) {
+				return repoDir;
 			}
 			tmp = tmp.getParentFile();
 		} while( tmp != null );
+		
 		throw new RuntimeException("Failed to find .git directory in subtree ending at "+directory.getAbsolutePath());
 	}
 
@@ -222,7 +249,7 @@ public class GitHelper {
 		}
 	}
 
-	public CommitList findCommits(final File localPath) throws RevisionSyntaxException, MissingObjectException, IncorrectObjectTypeException, AmbiguousObjectException, IOException, GitAPIException 
+	public CommitList findCommits(final File localPath,final IProgressCallback callback) throws RevisionSyntaxException, MissingObjectException, IncorrectObjectTypeException, AmbiguousObjectException, IOException, GitAPIException 
 	{
 		final CommitList result = new CommitList(localPath);
 
@@ -235,6 +262,7 @@ public class GitHelper {
 			public boolean visit(RevCommit commit) throws IOException 
 			{
 				if ( commitChangesFile( strippedPath , filter , commit ) ) {
+					callback.foundCommit( commit.getId() );
 					result.add( commit.getId() );
 				}
 				return true;
@@ -287,6 +315,9 @@ public class GitHelper {
 	protected void visitCommits(File localPath,boolean retainCommitBody,ICommitVisitor func) throws RevisionSyntaxException, AmbiguousObjectException, IncorrectObjectTypeException, IOException 
 	{
 		final ObjectId head = repository.resolve("HEAD");
+		if ( head == null ) {
+			throw new RuntimeException("Failed to resolve HEAD");
+		}
 		visitCommits(localPath , retainCommitBody , head , func );
 	}
 
@@ -393,18 +424,6 @@ public class GitHelper {
 			tree.setRecursive(true);
 			tree.addTree( current.getTree() );
 
-			/*
-while (tree.next)
-    if (tree.getDepth == cleanPath.size) {
-        // we are at the right level, do what you want
-    } else {
-        if (tree.isSubtree &&
-            name == cleanPath(tree.getDepth)) {
-            tree.enterSubtree
-        }
-    }
-}				 
-			 */		
 			while( tree.next() ) 
 			{
 				if ( tree.getDepth() == cleanPathSize ) 
@@ -477,7 +496,7 @@ while (tree.next)
 				final DiffFormatter df = new DiffFormatter(out);
 				df.setRepository(repository);
 				df.setDiffComparator(RawTextComparator.DEFAULT);
-				df.setDetectRenames(true);
+				df.setDetectRenames(false);
 				
 				final List<DiffEntry> diffs = df.scan(parent.getTree(), commit.getTree());
 				for (DiffEntry diff : diffs) {

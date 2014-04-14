@@ -15,48 +15,16 @@
  */
 package de.codesourcery.gittimelapse;
 
-import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.Component;
-import java.awt.Container;
-import java.awt.Font;
-import java.awt.GridBagConstraints;
-import java.awt.GridBagLayout;
-import java.awt.Menu;
-import java.awt.MenuBar;
-import java.awt.MenuItem;
-import java.awt.Point;
-import java.awt.Rectangle;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
-import java.awt.event.KeyAdapter;
-import java.awt.event.KeyEvent;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
+import java.awt.*;
+import java.awt.event.*;
+import java.io.*;
 import java.lang.reflect.InvocationTargetException;
-import java.util.Date;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
 
-import javax.swing.DefaultComboBoxModel;
-import javax.swing.DefaultListCellRenderer;
-import javax.swing.JComboBox;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JList;
-import javax.swing.JOptionPane;
-import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.JSlider;
-import javax.swing.JTextArea;
-import javax.swing.JTextPane;
-import javax.swing.JViewport;
-import javax.swing.SwingUtilities;
+import javax.swing.*;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
-import javax.swing.text.BadLocationException;
 import javax.swing.text.SimpleAttributeSet;
 import javax.swing.text.StyleConstants;
 
@@ -65,16 +33,14 @@ import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.PatchApplyException;
 import org.eclipse.jgit.diff.DiffFormatter;
 import org.eclipse.jgit.diff.RawText;
-import org.eclipse.jgit.errors.AmbiguousObjectException;
-import org.eclipse.jgit.errors.IncorrectObjectTypeException;
-import org.eclipse.jgit.errors.MissingObjectException;
-import org.eclipse.jgit.errors.RevisionSyntaxException;
+import org.eclipse.jgit.errors.*;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.patch.Patch;
 import org.eclipse.jgit.revwalk.RevCommit;
 
 import de.codesourcery.gittimelapse.GitHelper.ICommitVisitor;
+import de.codesourcery.gittimelapse.GitHelper.IProgressCallback;
 import de.codesourcery.gittimelapse.TextFile.ChangeType;
 
 public class MyFrame extends JFrame {
@@ -85,6 +51,34 @@ public class MyFrame extends JFrame {
 	private final GitHelper gitHelper;
 	private final GitHelper.CommitList commitList;
 	private final JComboBox<DiffDisplayMode> diffModeChooser = new JComboBox<>();
+
+	private boolean adjustmentListenerActive = true;
+
+	protected static final class LineOffsets 
+	{
+		public final int lineNumber;
+		public final int start;
+		public final int end;
+
+		public LineOffsets(int lineNumber,int start,int end) {
+			if ( lineNumber < 0 ) {
+				throw new IllegalArgumentException("Invalid line number");
+			}
+			if ( start < 0 || end < 0 ) {
+				throw new IllegalArgumentException("Invalid line start/end offset");
+			}
+			if ( end < start ) {
+				throw new IllegalArgumentException("Invalid line start/end offset");
+			}
+			this.lineNumber = lineNumber;
+			this.start=start;
+			this.end=end;
+		}
+
+		public boolean containsOffset(int offset) {
+			return start <= offset && offset < end;
+		}
+	}	
 
 	protected static enum DiffDisplayMode {
 		ALIGN_CHANGES,
@@ -104,19 +98,42 @@ public class MyFrame extends JFrame {
 		}
 	};
 
+
 	public MyFrame(File file,GitHelper gitHelper) throws RevisionSyntaxException, MissingObjectException, IncorrectObjectTypeException, AmbiguousObjectException, IOException, GitAPIException 
 	{
 		super("GIT timelapse: "+file.getAbsolutePath());
 		if ( gitHelper == null ) {
 			throw new IllegalArgumentException("gitHelper must not be NULL");
 		}
-		
+
 		this.gitHelper = gitHelper;
 		this.file=file;
 		this.diffPanel = new DiffPanel();
-		
+
+		final JDialog dialog = new JDialog((Frame) null,"Please wait...",false);
+		dialog.getContentPane().setLayout( new BorderLayout() );
+		dialog.getContentPane().add( new JLabel("Please wait, locating revisions...") , BorderLayout.CENTER );
+		dialog.pack();
+		dialog.setVisible(true);
+
+		final IProgressCallback callback = new IProgressCallback() {
+
+			@Override
+			public void foundCommit(ObjectId commitId) {
+				System.out.println("*** Found commit "+commitId);
+			}
+		};
+
+		System.out.println("Locating commits...");
+		commitList = gitHelper.findCommits( file , callback );
+
+		dialog.setVisible(false);
+
+		if ( commitList.isEmpty() ) {
+			throw new RuntimeException("Found no commits");
+		}		
 		setMenuBar( createMenuBar() );
-		
+
 		diffModeChooser.setModel( new DefaultComboBoxModel<MyFrame.DiffDisplayMode>( DiffDisplayMode.values() ) );
 		diffModeChooser.setSelectedItem( DiffDisplayMode.ALIGN_CHANGES );
 		diffModeChooser.addActionListener( new ActionListener() {
@@ -132,8 +149,9 @@ public class MyFrame extends JFrame {
 				}				
 			}
 		});
+
 		diffModeChooser.setRenderer( new DefaultListCellRenderer()  {
-			
+
 			@Override
 			public Component getListCellRendererComponent(JList<?> list,
 					Object value, int index, boolean isSelected,
@@ -155,10 +173,8 @@ public class MyFrame extends JFrame {
 			}
 		});
 
-		commitList = gitHelper.findCommits( file );
-		
 		revisionSlider = new JSlider( 1 , commitList.size() );
-		
+
 		revisionSlider.setPaintLabels(true);
 		revisionSlider.setPaintTicks(true);
 
@@ -187,49 +203,55 @@ public class MyFrame extends JFrame {
 				if ( ! revisionSlider.getValueIsAdjusting() ) 
 				{
 					final ObjectId commit = commitList.getCommit(revisionSlider.getValue()-1);
+					long time = -System.currentTimeMillis();
 					try {
 						diffPanel.showRevision( commit );
 					} catch (IOException | PatchApplyException e1) {
 						e1.printStackTrace();
+					} finally {
+						time += System.currentTimeMillis();
+					}
+					if ( Main.DEBUG_MODE ) {
+						System.out.println("Rendering time: "+time);
 					}
 				}
 			}
 		});
 
 		getContentPane().setLayout( new GridBagLayout() );
-		
+
 		GridBagConstraints cnstrs = new GridBagConstraints();
 		cnstrs.gridx=0 ; cnstrs.gridy=0;
 		cnstrs.gridwidth=1; cnstrs.gridheight=1;
 		cnstrs.weightx=0; cnstrs.weighty=0;
 		cnstrs.fill = GridBagConstraints.NONE;
-		
+
 		getContentPane().add( new JLabel("Diff display mode:"), cnstrs );		
-		
+
 		cnstrs = new GridBagConstraints();
 		cnstrs.gridx=1 ; cnstrs.gridy=0;
 		cnstrs.gridwidth=1; cnstrs.gridheight=1;
 		cnstrs.weightx=0; cnstrs.weighty=0;
 		cnstrs.fill = GridBagConstraints.NONE;
-		
+
 		getContentPane().add( diffModeChooser , cnstrs );
-		
+
 		cnstrs = new GridBagConstraints();
 		cnstrs.gridx=2 ; cnstrs.gridy=0;
 		cnstrs.gridwidth=1; cnstrs.gridheight=1;
 		cnstrs.weightx=1.0; cnstrs.weighty=0;
 		cnstrs.fill = GridBagConstraints.HORIZONTAL;		
-		
+
 		getContentPane().add( revisionSlider , cnstrs );
-		
+
 		cnstrs = new GridBagConstraints();
 		cnstrs.gridx=0 ; cnstrs.gridy=1;
 		cnstrs.gridwidth=3; cnstrs.gridheight=1;
 		cnstrs.weightx=1; cnstrs.weighty=1;
 		cnstrs.fill = GridBagConstraints.BOTH;			
-		
+
 		getContentPane().add( diffPanel , cnstrs );
-		
+
 		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);		
 
 		if ( latestCommit != null ) {
@@ -240,29 +262,29 @@ public class MyFrame extends JFrame {
 	private MenuBar createMenuBar() {
 		final MenuBar menuBar = new MenuBar();
 		final Menu menu = new Menu("File");
-		
+
 		final MenuItem item1 = new MenuItem("About...");
 		item1.addActionListener( new ActionListener() {
-			
+
 			@Override
 			public void actionPerformed(ActionEvent e) 
 			{
 				JOptionPane.showMessageDialog( null , "GIT timelapse V0.1\n\n(C) 2014 tobias.gierke@code-sourcery.de" , "About" , JOptionPane.PLAIN_MESSAGE);
 			}
 		});
-		
+
 		menu.add( item1 );
-		
+
 		final MenuItem item2 = new MenuItem("Quit");
 		item2.addActionListener( new ActionListener() {
-			
+
 			@Override
 			public void actionPerformed(ActionEvent e) 
 			{
 				System.exit(0);
 			}
 		});
-		
+
 		menu.add( item2 );		
 		menuBar.add( menu );
 		return menuBar;
@@ -285,10 +307,15 @@ public class MyFrame extends JFrame {
 
 		private final SimpleAttributeSet deletedLineStyle;
 		private final SimpleAttributeSet addedLineStyle;
+
+		private final JScrollPane leftScrollPane;		
+		private final JScrollPane rightScrollPane;
+
+		private final Map<Integer,LineOffsets> lineNumberToOffsets = new HashMap<>();		
+		private int currentLineNumber = -1;		
 		
-		private final JScrollPane rightPane;
-		
-		private int caretPosition = -1;		
+		private TextLineNumber previousLineNumbersComponent;
+		private TextLineNumber currentLineNumbersComponent;
 
 		public DiffPanel() 
 		{
@@ -299,7 +326,7 @@ public class MyFrame extends JFrame {
 
 			currentRevisionInfo.addKeyListener( keyListener );
 			previousRevisionInfo.addKeyListener( keyListener );
-			
+
 			currentRevisionInfo.setFont(font);
 			previousRevisionInfo.setFont(font);
 			currentRevisionText.setFont(font);
@@ -314,43 +341,51 @@ public class MyFrame extends JFrame {
 			previousRevisionInfo.setEditable(false);			
 
 			currentRevisionText.setEditable(false);
-
-			previousRevisionText.setEditable(false);		
+			previousRevisionText.setEditable(false);
 			
+			previousLineNumbersComponent = new TextLineNumber(previousRevisionText,4);
+			currentLineNumbersComponent = new TextLineNumber(currentRevisionText,4);				
+
 			setLayout(new BorderLayout() );
 
+			// setup left panel
 			final JPanel leftPanel = new JPanel();
 			leftPanel.setLayout( new BorderLayout() );
 			leftPanel.add( previousRevisionInfo , BorderLayout.NORTH);
-			final JScrollPane leftPane = new JScrollPane( previousRevisionText );
-			leftPanel.add( leftPane , BorderLayout.CENTER);
+			
+			leftScrollPane = new JScrollPane( previousRevisionText );
+			
+			final JPanel leftLineNumAndText  = createTextComponentWithLineNumbers(previousLineNumbersComponent,leftScrollPane);
+			leftPanel.add( leftLineNumAndText , BorderLayout.CENTER);
 
+			// setup right panel
 			final JPanel rightPanel = new JPanel();
 			rightPanel.setLayout( new BorderLayout() );
 			rightPanel.add( currentRevisionInfo , BorderLayout.NORTH);
-			rightPane = new JScrollPane( currentRevisionText );
-			rightPanel.add( rightPane , BorderLayout.CENTER);	
+			
+			rightScrollPane = new JScrollPane( currentRevisionText );
+			
+			final JPanel rightLineNumAndText  = createTextComponentWithLineNumbers(currentLineNumbersComponent,rightScrollPane);			
+			rightPanel.add( rightLineNumAndText , BorderLayout.CENTER);	
 
 			// link scroll bars
-			leftPane.getHorizontalScrollBar().setModel(rightPane.getHorizontalScrollBar().getModel());
-			leftPane.getVerticalScrollBar().setModel(rightPane.getVerticalScrollBar().getModel());
-			
-			 // track offset of first visible line
-//			 rightPane.getViewport().addChangeListener(new ChangeListener() {
-//	                @Override
-//	                public void stateChanged(ChangeEvent e) 
-//	                {
-//	                    if (currentRevisionText.getText().length() > 0) 
-//	                    {
-//	                        JViewport viewport = (JViewport) e.getSource();
-//	                        Rectangle viewRect = viewport.getViewRect();
-//
-//	                        Point p = viewRect.getLocation();
-//	                        caretPosition = currentRevisionText.viewToModel(p);
-//	                    }
-//	                }
-//	            });			
-			
+			leftScrollPane.getHorizontalScrollBar().setModel(rightScrollPane.getHorizontalScrollBar().getModel());
+			final JScrollBar verticalScrollbar = rightScrollPane.getVerticalScrollBar();
+
+			verticalScrollbar.addAdjustmentListener( new AdjustmentListener() {
+
+				@Override
+				public void adjustmentValueChanged(AdjustmentEvent e) 
+				{
+					if ( adjustmentListenerActive && ! e.getValueIsAdjusting() ) 
+					{
+						rememberCaretPosition();
+					}
+				}
+			});
+
+			final BoundedRangeModel verticalScrollbarModel = verticalScrollbar.getModel();
+			leftScrollPane.getVerticalScrollBar().setModel(verticalScrollbarModel);
 
 			final JPanel compoundPanel = new JPanel();
 			compoundPanel.setLayout( new GridBagLayout() );
@@ -367,7 +402,7 @@ public class MyFrame extends JFrame {
 			cnstrs.gridwidth=1; cnstrs.gridheight=1;
 			cnstrs.weightx=0.5; cnstrs.weighty=0.8;
 			cnstrs.fill = GridBagConstraints.BOTH;
-			compoundPanel.add( leftPane , cnstrs );
+			compoundPanel.add( leftLineNumAndText , cnstrs );
 
 			// right panel
 			cnstrs = new GridBagConstraints();
@@ -382,132 +417,217 @@ public class MyFrame extends JFrame {
 			cnstrs.gridwidth=1; cnstrs.gridheight=1;
 			cnstrs.weightx=0.5; cnstrs.weighty=0.8;
 			cnstrs.fill = GridBagConstraints.BOTH;
-			compoundPanel.add( rightPane , cnstrs );
+			compoundPanel.add( rightScrollPane , cnstrs );
 
 			add( compoundPanel , BorderLayout.CENTER );
+		}
+		
+		private JPanel createTextComponentWithLineNumbers(TextLineNumber tl,JScrollPane scrollPane) 
+		{
+			final JPanel lineNumbersAndText = new JPanel();
+			lineNumbersAndText.setLayout( new GridBagLayout() );
+			
+			GridBagConstraints cnstrs = new GridBagConstraints();
+			cnstrs.gridx=0 ; cnstrs.gridy=0;
+			cnstrs.gridwidth=1; cnstrs.gridheight=1;
+			cnstrs.weightx=0; cnstrs.weighty=1;
+			cnstrs.fill = GridBagConstraints.VERTICAL;			
+			
+			lineNumbersAndText.add( tl , cnstrs );
+			
+			cnstrs = new GridBagConstraints();
+			cnstrs.gridx=1 ; cnstrs.gridy=0;
+			cnstrs.gridwidth=1; cnstrs.gridheight=1;
+			cnstrs.weightx=1; cnstrs.weighty=1;
+			cnstrs.fill = GridBagConstraints.BOTH;				
+			
+			scrollPane.setRowHeaderView( tl );
+			lineNumbersAndText.add( scrollPane , cnstrs );
+			return lineNumbersAndText;
 		}
 
 		public void showRevision(ObjectId current) throws IOException, PatchApplyException {
 			showRevisions(commitList.getPredecessor(current),current);
 		}
-		
-		private void backupCaretPosition() {
-            JViewport viewport = (JViewport) rightPane.getViewport();
-            Rectangle viewRect = viewport.getViewRect();
 
-            Point p = viewRect.getLocation();
-            caretPosition = currentRevisionText.viewToModel(p);
+		private void rememberCaretPosition() 
+		{
+			final int leftCaretPosition = previousRevisionText.viewToModel( getPoint( leftScrollPane ) );
+			final int rightCaretPosition = currentRevisionText.viewToModel( getPoint( rightScrollPane ) );			
+			int leftLine = -1;
+			if ( leftCaretPosition >= 0 ) {
+				leftLine = previousRevisionText.getDocument().getDefaultRootElement().getElementIndex( leftCaretPosition );
+				previousRevisionText.setCaretPosition( leftCaretPosition );				
+			}
+			if ( rightCaretPosition >= 0 ) 
+			{
+				currentLineNumber= currentRevisionText.getDocument().getDefaultRootElement().getElementIndex( rightCaretPosition );
+				currentRevisionText.setCaretPosition( rightCaretPosition );
+			}			
+			if ( Main.DEBUG_MODE) {
+				System.out.println("Right Caret position "+rightCaretPosition+" => line "+currentLineNumber);
+				System.out.println("Left Caret position "+leftCaretPosition+" => line "+leftLine);
+			}
 		}
 		
+		private Point getPoint(JScrollPane pane) {
+			JViewport rightViewport = (JViewport) rightScrollPane.getViewport();
+			Rectangle rightViewRect = rightViewport.getViewRect();
+			return rightViewRect.getLocation();
+		}
+
 		public final void restoreCaretPosition()
 		{
+			if ( currentLineNumber < 0 ) {
+				return;
+			}
+
+			final int caretPosition = lineNumberToOffset( currentLineNumber );
+			if ( Main.DEBUG_MODE ) {
+				System.out.println("restoreCaretPosition(): Line "+currentLineNumber+" => offset "+caretPosition);
+			}
 			if ( caretPosition < 0 ) {
 				return;
 			}
-			
-			final Runnable r = new Runnable() {
+
+			final Runnable r = new Runnable() 
+			{
 				@Override
-				public void run() {
-
-					final Container container = SwingUtilities.getAncestorOfClass(JViewport.class, currentRevisionText);
-
-					if (container == null) {
-						return;
-					}
-
-					try {
-						final Rectangle r = currentRevisionText.modelToView(caretPosition);
-						if (r == null ) {
-							return;
-						}
-						final JViewport viewport = (JViewport) container;
-						final int extentHeight = viewport.getExtentSize().height;
-						final int viewHeight = viewport.getViewSize().height;
-
-						int y = Math.max(0, r.y - (extentHeight / 2));
-						y = Math.min(y, viewHeight - extentHeight);
-
-						viewport.setViewPosition(new Point(0, y));
-					} 
-					catch (BadLocationException ble) {
-					}    			
+				public void run() 
+				{
+					currentRevisionText.setCaretPosition( caretPosition );
 				}
-
 			};
 
-			if ( SwingUtilities.isEventDispatchThread() ) {
+			if ( SwingUtilities.isEventDispatchThread() ) 
+			{
 				r.run();
-			} else {
+			} 
+			else 
+			{
 				try {
 					SwingUtilities.invokeAndWait( r );
-				} catch (InvocationTargetException | InterruptedException e) {
-				}
+				} 
+				catch (InvocationTargetException | InterruptedException e) { /* can't help it */ }
 			}
 		}		
 
 		public void showRevisions(ObjectId previous,ObjectId current) throws IOException, PatchApplyException 
 		{
-			backupCaretPosition();
-			
 			populateCommitInfo( previousRevisionInfo , previous );
 			populateCommitInfo( currentRevisionInfo , current );
 
 			final byte[] currentFile = commitList.readFile( current );
-			if ( previous == null ) {
-				final byte[] currentRev = current != null ? currentFile : new byte[0];
-				currentRevisionText.setText( toString( currentRev ) );
-				previousRevisionText.setText( "" );		
-				
-				restoreCaretPosition();
-				return;
-			}
 
-			if ( diffModeChooser.getSelectedItem() == DiffDisplayMode.REGULAR ) 
+			rememberCaretPosition();
+
+			adjustmentListenerActive = false; // disable scrollbar adjustment listener so we don't overwrite the caret position we just remembered 
+			try 
 			{
+				if ( previous == null ) {
+					final byte[] currentRev = current != null ? currentFile : new byte[0];
+					setCurrentText( toString( currentRev ) );
+					previousRevisionText.setText( "" );		
+					restoreCaretPosition();
+					return;
+				}
+
+				if ( diffModeChooser.getSelectedItem() == DiffDisplayMode.REGULAR ) 
+				{
+					final byte[] diff = diff(previous,current);
+
+					final RawText previousText = new RawText( commitList.readFile( previous ) );
+					TextFile tf = new TextFile( previousText );
+
+					previousRevisionText.setText( new TextFile( previousText ).toString() );
+
+					Patch patch = new Patch();
+					patch.parse( new ByteArrayInputStream(diff ) );				
+					tf.forwardsPatch( patch );
+					highlightText(previousRevisionText, tf );
+
+					tf = new TextFile( previousText );
+
+					patch = new Patch();
+					patch.parse( new ByteArrayInputStream(diff ) );
+					tf.backwardsPatch( patch );
+					setCurrentText( tf.toString() );
+					highlightText(currentRevisionText, tf );
+
+					restoreCaretPosition();				
+					return;
+				}
+
+				// old text
+				final RawText previousFile = new RawText( commitList.readFile( previous ) );		
 				final byte[] diff = diff(previous,current);
 
-				final RawText previousText = new RawText( commitList.readFile( previous ) );
-				TextFile tf = new TextFile( previousText );
+				final TextFile textAndAttributes = generateDiff( diff , previousFile , current ) ;
+				previousRevisionText.setText( textAndAttributes.toString() );
 
-				previousRevisionText.setText( new TextFile( previousText ).toString() );
+				highlightText(previousRevisionText,textAndAttributes);
 
-				Patch patch = new Patch();
-				patch.parse( new ByteArrayInputStream(diff ) );				
-				tf.forwardsPatch( patch );
-				highlightText(previousRevisionText, tf );
+				// new text
 
-				tf = new TextFile( previousText );
+				final TextFile tf = new TextFile( new RawText( currentFile ) );
+				final Patch patch = new Patch();
+				patch.parse( new ByteArrayInputStream( diff( current , previous ) ) );
+				tf.backwardsPatchAndAlign( patch );
 
-				patch = new Patch();
-				patch.parse( new ByteArrayInputStream(diff ) );
-				tf.backwardsPatch( patch );
-				currentRevisionText.setText( tf.toString() );
-				highlightText(currentRevisionText, tf );
-				
+				setCurrentText( tf.toString() );
+				highlightText( currentRevisionText , tf );
+
 				restoreCaretPosition();
-				return;
+			} finally {
+				adjustmentListenerActive = true;
 			}
+		}
 
-			// old text
-			final RawText previousFile = new RawText( commitList.readFile( previous ) );		
-			final byte[] diff = diff(previous,current);
+		private int lineNumberToOffset(int lineNumber) 
+		{
+			for ( LineOffsets l : lineNumberToOffsets.values() ) {
+				if ( l.lineNumber == lineNumber ) {
+					return l.start;
+				}
+			}
+			return -1;		
+		}
 
-			final TextFile textAndAttributes = generateDiff( diff , previousFile , current ) ;
-			previousRevisionText.setText( textAndAttributes.toString() );
+		/**
+		 * 
+		 * @param text
+		 * @param offset
+		 * @return line number (first line has number 0)  or -1 if offset is out-of-bounds
+		 */
+		private int offsetToLineNumber(int offset) 
+		{
+			for ( LineOffsets l : lineNumberToOffsets.values() ) {
+				if ( l.containsOffset( offset ) ) {
+					return l.lineNumber;
+				}
+			}
+			return -1;
+		}	
 
-			highlightText(previousRevisionText,textAndAttributes);
+		protected void setCurrentText(String newText) 
+		{
+			this.lineNumberToOffsets.clear();
 
-			// new text
-
-			final TextFile tf = new TextFile( new RawText( currentFile ) );
-			final Patch patch = new Patch();
-			patch.parse( new ByteArrayInputStream( diff( current , previous ) ) );
-			tf.backwardsPatchAndAlign( patch );
-
-			currentRevisionText.setText( tf.toString() );
-			highlightText( currentRevisionText , tf );
-			
-			restoreCaretPosition();
+			int offset1 = 0;
+			int offset2 = 0;
+			int currentLine = 0;
+			final int len = newText.length();
+			for ( int i = 0 ; i < len ; i++ ) 
+			{
+				final char c = newText.charAt(i);
+				if ( c == '\n' ) {
+					offset1 = offset2;
+					offset2 = i;
+					lineNumberToOffsets.put( currentLine , new LineOffsets(currentLine,offset1,offset2) );
+					currentLine++;
+				}
+			}		
+			currentRevisionText.setText( newText );		
 		}
 
 		private void highlightText(JTextPane editor , final TextFile textAndAttributes) throws IOException 
@@ -617,5 +737,5 @@ public class MyFrame extends JFrame {
 			final RawText text = new RawText( blob );
 			return text.getString( 0 , text.size() , true );
 		}
-	}
+	}	
 }
